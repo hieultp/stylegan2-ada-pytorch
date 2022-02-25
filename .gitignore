@@ -1,2 +1,6 @@
 __pycache__/
 .cache/
+.vscode/
+outputs/
+runs/
+move_across_boundary/
