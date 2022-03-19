@@ -1,0 +1,30 @@
+dependencies:
+  - python=3.7
+  - cudatoolkit=11
+  - pip
+  - pip:
+    - --find-links https://download.pytorch.org/whl/cu113/torch_stable.html
+    - torch==1.10.2+cu113
+    - torchvision==0.11.3+cu113
+    - pytorch-lightning
+    - torchmetrics[image]
+    - adabelief-pytorch
+    - ranger-adabelief
+    - rich
+    - wandb
+    - hydra-core==1.1.0
+    - hydra-colorlog==1.1.0
+    - hydra-optuna-sweeper==1.1.0
+    - black
+    - flake8
+    - isort
+    - jupyterlab
+    - jupyterlab-git
+    - numpy
+    - click
+    - requests
+    - tqdm
+    - pyspng
+    - ninja
+    - imageio-ffmpeg==0.4.3
+    - imageio
