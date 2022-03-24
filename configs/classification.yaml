@@ -1,0 +1,69 @@
+name: bedroom_256_classification
+state: train # train/test/debug
+seed: 42
+
+# path to original working directory
+# hydra hijacks working directory by changing it to the current log directory,
+# so it's useful to have this path as a special variable
+# https://hydra.cc/docs/next/tutorials/basic/running_your_app/working_directory
+work_dir: ${hydra:runtime.cwd}
+
+logging:
+  root: ./logs
+
+dataset:
+  root: /home/ubuntu/bedroom_256_train/
+  batch_size: 64
+  num_workers: 16
+  pin_memory: True
+  val_size: 1076
+  train_size: 55000
+  label_smoothing: 0.0
+
+model:
+  pretrained: False
+  sync_dist: True # Use when training with multiple gpu
+
+  optimizer:
+    lr: 5.e-4
+    weight_decay: 1.e-4
+    norm_weight_decay: 0.e-0
+  lr_scheduler:
+    monitor: ${model_ckpt.monitor}
+    warmup_epochs: 0
+
+trainer:
+  # GPU related
+  precision: 16
+  gpus: -1
+  num_nodes: 1
+  strategy: ddp
+  benchmark: True
+  sync_batchnorm: False
+
+  # Training related
+  max_steps: 10000
+  # limit_train_batches: 1.0
+  # gradient_clip_val: 0.1 # gradient clipping max norm
+  # gradient_clip_algorithm: "norm"
+
+# Logging, progress bar
+refresh_rate: 1
+
+model_ckpt:
+  dirpath: ckpts/
+  filename: "vgg19_bn-epoch{epoch}-step{step}"
+  monitor: val/loss
+  save_last: True
+  save_top_k: 8
+  mode: min
+  auto_insert_metric_name: False
+
+ddp_plugin:
+  # These two args only work with accelerator = "ddp"
+  find_unused_params: False
+  fp16_hook: True
+
+hydra:
+  run:
+    dir: ./outputs/${name}/${now:%Y-%m-%d-%H-%M-%S}

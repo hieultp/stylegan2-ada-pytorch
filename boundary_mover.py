@@ -10,6 +10,7 @@
 
 import copy
 import os
+from pathlib import Path
 
 import click
 import imageio
@@ -17,13 +18,15 @@ import numpy as np
 import PIL.Image
 import torch
 import torch.nn.functional as F
+from adabelief_pytorch import AdaBelief
 from pytorch_lightning import seed_everything
+from torchmetrics.functional import structural_similarity_index_measure
 from tqdm import trange
 
 import dnnlib
 import legacy
 from classifier import Classifier
-from lightning_utils import set_debug_apis
+from lightning_utils import pil_loader, set_debug_apis
 from metric_learner import Measurer
 
 torch.backends.cudnn.benchmark = True
@@ -34,8 +37,8 @@ def project(
     G,
     classifier: Classifier,
     measurer: Measurer,
-    target_image: np.ndarray,
     target_cls: int,
+    source_image: np.ndarray,
     *,
     seed=None,
     num_steps=1000,
@@ -47,12 +50,9 @@ def project(
     noise_ramp_length=0.75,
     bce_weight=1e0,
     sim_weight=1e0,
-    lpips_weight=1e0,
     regularize_noise_weight=1e5,
     device: torch.device,
 ):
-    assert target_image.shape == (G.img_channels, G.img_resolution, G.img_resolution)
-
     G = copy.deepcopy(G).eval().requires_grad_(False).to(device)  # type: ignore
 
     # Compute w stats.
@@ -75,7 +75,7 @@ def project(
     w_out = torch.zeros(
         [num_steps] + list(w_opt.shape[1:]), dtype=torch.float32, device=device
     )
-    optimizer = torch.optim.AdamW(
+    optimizer = AdaBelief(
         [w_opt] + list(noise_bufs.values()),
         betas=(0.9, 0.999),
         lr=initial_learning_rate,
@@ -86,19 +86,13 @@ def project(
         buf[:] = torch.randn_like(buf)
         buf.requires_grad = True
 
-    # Load VGG16 feature detector.
-    url = "https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metrics/vgg16.pt"
-    with dnnlib.util.open_url(url) as f:
-        vgg16 = torch.jit.load(f).eval().to(device)
-
     # Prepare target
     target_sim = torch.tensor([1.0], dtype=torch.float32, device=device)
     target_cls = torch.tensor([target_cls], dtype=torch.float32, device=device)
-    target_image = torch.tensor([target_image], dtype=torch.float32, device=device)
-    if target_image.shape[2] > 256:
-        target_image = F.interpolate(target_image, size=(256, 256), mode="area")
-    target_features = vgg16(target_image, resize_images=False, return_lpips=True)
-    target_image = target_image / 255
+    if source_image is not None:
+        source_image = source_image.transpose(2, 0, 1)
+        source_image = torch.tensor([source_image], dtype=torch.float32, device=device)
+        source_image = source_image / 255
 
     pbar = trange(num_steps)
     for step in pbar:
@@ -124,11 +118,12 @@ def project(
         if synth_image.shape[2] > 256:
             synth_image = F.interpolate(synth_image, size=(256, 256), mode="area")
 
-        # Features for synth images.
-        synth_features = vgg16(
-            synth_image * 255, resize_images=False, return_lpips=True
-        )
-        lpips = (target_features - synth_features).square().sum()
+        if step == 0:
+            reference_image = (
+                source_image
+                if source_image is not None
+                else synth_image.detach().clone()
+            )
 
         # BCELoss to guide the latent based on the classifier
         logit: torch.Tensor = classifier(synth_image)
@@ -136,7 +131,7 @@ def project(
 
         if measurer is not None:
             # Similarity loss to guide the latent based on the similarity between the two generated images
-            concat_images = torch.cat([target_image, synth_image], dim=-1)
+            concat_images = torch.cat([reference_image, synth_image], dim=-1)
             sim_score, feats = measurer(concat_images)
             sim_loss = measurer._calculate_loss(sim_score, target_sim, feats)["loss"]
         else:
@@ -154,8 +149,7 @@ def project(
                 noise = F.avg_pool2d(noise, kernel_size=2)
 
         loss = (
-            lpips_weight * lpips
-            + bce_weight * bce_loss
+            bce_weight * bce_loss
             + sim_weight * sim_loss
             + reg_loss * regularize_noise_weight
         )
@@ -192,13 +186,6 @@ def project(
 @click.command()
 @click.option("--network", "network_pkl", help="Network pickle filename", required=True)
 @click.option(
-    "--target",
-    "target_fname",
-    help="Target image file to project to",
-    required=True,
-    metavar="FILE",
-)
-@click.option(
     "--classifier",
     "classifier_pkl",
     help="Classifier that has trained on empty/full scenes",
@@ -217,6 +204,12 @@ def project(
     type=click.Choice(["0", "1"]),
     default="0",
     show_default=True,
+)
+@click.option(
+    "--source",
+    "source_fname",
+    help="Source image file to project to",
+    default="",
 )
 @click.option(
     "--num-steps",
@@ -238,28 +231,22 @@ def project(
 )
 def run_projection(
     network_pkl: str,
-    target_fname: str,
     classifier_pkl: str,
     measurer_pkl: str,
     target_cls: str,
+    source_fname: str,
     outdir: str,
     save_video: bool,
     seed: int,
     num_steps: int,
 ):
-    """Project given image to the latent space of pretrained network pickle.
-
-    Examples:
-
-    \b
-    python projector.py --outdir=out --target=~/mytargetimg.png \\
-        --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/ffhq.pkl
-    """
     # TODO: project empty/full -> latent space, measure distance between them
     device = torch.device("cuda")
     seed = seed_everything(seed)
     target_cls = int(target_cls)
     outdir = os.path.join(outdir, f"{seed}-cls-{target_cls}")
+    if source_fname:
+        outdir = f"{outdir}-{Path(source_fname).stem}"
 
     # Load networks.
     print(f'Loading networks from "{network_pkl}"...')
@@ -281,25 +268,19 @@ def run_projection(
     else:
         measurer = None
 
-    # Load target image.
-    target_pil = PIL.Image.open(target_fname).convert("RGB")
-    w, h = target_pil.size
-    s = min(w, h)
-    target_pil = target_pil.crop(
-        ((w - s) // 2, (h - s) // 2, (w + s) // 2, (h + s) // 2)
-    )
-    target_pil = target_pil.resize(
-        (G.img_resolution, G.img_resolution), PIL.Image.LANCZOS
-    )
-    target_img = np.array(target_pil, dtype=np.uint8)
+    if source_fname:
+        source_image = pil_loader(source_fname)
+        source_image = np.array(source_image, dtype=np.uint8)
+    else:
+        source_image = None
 
     # Optimize projection.
     projected_w_steps = project(
         G,
-        classifier=classifier,
-        measurer=measurer,
-        target_img=target_img.transpose(2, 0, 1),
+        classifier,
+        measurer,
         target_cls=target_cls,
+        source_image=source_image,
         seed=seed,
         num_steps=num_steps,
         device=device,
@@ -319,12 +300,13 @@ def run_projection(
         )
 
     # Save final projected frame and W vector.
-    target_pil.save(f"{outdir}/target.png")
+    if source_image is not None:
+        PIL.Image.fromarray(source_image, "RGB").save(f"{outdir}/source.png")
     projected_w = projected_w_steps[-1]
     synth_image = G.synthesis(projected_w.unsqueeze(0), noise_mode="const")
     synth_image = tensor_to_np_img(synth_image)
     PIL.Image.fromarray(synth_image, "RGB").save(f"{outdir}/proj.png")
-    np.savez(f"{outdir}/projected_w.npz", w=projected_w.unsqueeze(0).cpu().numpy())
+    np.save(f"{outdir}/proj.npy", projected_w.unsqueeze(0).cpu().numpy())
 
     # Moved the video to the end so we can look at images while these videos take time to compile
     if save_video:
@@ -332,10 +314,12 @@ def run_projection(
             f"{outdir}/proj.mp4", mode="I", fps=24, codec="libx264", bitrate="16M"
         )
         print(f'Saving optimization progress video "{outdir}/proj.mp4"')
-        for projected_w in projected_w_steps:
+        for idx, projected_w in enumerate(projected_w_steps):
             synth_image = G.synthesis(projected_w.unsqueeze(0), noise_mode="const")
             synth_image = tensor_to_np_img(synth_image)
-            video.append_data(np.concatenate([target_uint8, synth_image], axis=1))
+            if idx == 0:
+                ref_image = source_image if source_image is not None else synth_image
+            video.append_data(np.concatenate([ref_image, synth_image], axis=1))
         video.close()
 
 

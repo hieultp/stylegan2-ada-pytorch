@@ -1,4 +1,4 @@
-name: bedroom_256_boundary
+name: bedroom_256_similarity
 state: train # train/test/debug
 seed: 42
 
@@ -14,27 +14,22 @@ logging:
 dataset:
   root: /home/ubuntu/bedroom_256_train/
   batch_size: 64
-  num_workers: 8
+  num_workers: 16
   pin_memory: True
-  val_size: 1076 # 1076 over 56076
+  val_size: 538
+  train_size: 27500
 
 model:
   pretrained: False
   sync_dist: True # Use when training with multiple gpu
 
-  monitor: val/loss
   optimizer:
-    lr: 1.e-4
+    lr: 5.e-4
     weight_decay: 1.e-4
+    norm_weight_decay: 0.e-0
   lr_scheduler:
-    mode: min
-    factor: 0.5
-    patience: 10
-    threshold: 1.e-4
-    threshold_mode: rel
-    cooldown: 0
-    min_lr: 1.e-8
-    verbose: True
+    monitor: ${model_ckpt.monitor}
+    warmup_epochs: 0
 
 trainer:
   # GPU related
@@ -43,7 +38,7 @@ trainer:
   num_nodes: 1
   strategy: ddp
   benchmark: True
-  sync_batchnorm: True
+  sync_batchnorm: False
 
   # Training related
   max_steps: 10000
@@ -56,18 +51,18 @@ refresh_rate: 1
 
 model_ckpt:
   dirpath: ckpts/
-  filename: "vgg19_bn-epoch{epoch}-step{step}"
-  monitor: ${model.monitor}
+  filename: "regnet_x_8gf-epoch{epoch}-step{step}"
+  monitor: val/loss
   save_last: True
-  save_top_k: 4
+  save_top_k: 8
   mode: min
   auto_insert_metric_name: False
 
 ddp_plugin:
   # These two args only work with accelerator = "ddp"
   find_unused_params: False
-  # fp16_hook: True
+  fp16_hook: True
 
 hydra:
   run:
-    dir: ./outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}-${name}
+    dir: ./outputs/${name}/${now:%Y-%m-%d-%H-%M-%S}
