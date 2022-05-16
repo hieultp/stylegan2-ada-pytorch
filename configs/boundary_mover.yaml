@@ -10,20 +10,21 @@ work_dir: ${hydra:runtime.cwd}
 network_pkl: ${work_dir}/runs/00000-bedroom_256_train_mixed-mirror-stylegan2-kimg15000/network-snapshot-015000.pkl
 classifier_pkl: ${work_dir}/outputs/bedroom_256_classification/2022-03-21-16-38-14/ckpts/vgg19_bn-epoch11-step9999.ckpt
 measurer_pkl: ${work_dir}/outputs/bedroom_256_similarity/2022-03-22-16-31-15/ckpts/regnet_x_8gf-epoch23-step9999.ckpt
-autoencoder_pkl: ${work_dir}/outputs/bedroom_256_autoencoder/2022-04-05-10-42-05/ckpts/autoencoder-epoch58-step50000.ckpt
-encoded_vec: ${work_dir}/outputs/bedroom_256_autoencoder/2022-04-05-10-42-05/encoded_direction_vec.pt
-autoencoder_f2e_pkl: ${work_dir}/outputs/bedroom_256_autoencoder_f2e/2022-05-04-08-03-23/ckpts/autoencoder-epoch116-step50000.ckpt
+autoencoder_f2e_pkl: ${work_dir}/outputs/bedroom_256_autoencoder_f2e/2022-05-09-08-29-41/ckpts/autoencoder-epoch114-step49335.ckpt
 target_cls: 1
 source_fname: ""
+source_dir: /home/ubuntu/bedroom_256_train/
+random_source_fname: False
 num_steps: 500
 save_video: True
 
 mode: "random_seed"
-outdir: ${work_dir}/results/boundary_mover/random/measurer
-reference_dir: ${work_dir}/results/boundary_mover/random/classifier_only
-disable_networks: ["autoencoder_pkl", "encoded_vec", "autoencoder_f2e_pkl"]
+outdir: ${work_dir}/results/boundary_mover/random_img/classifier_only
+reference_dir: ${work_dir}/results/boundary_mover/random_img/classifier_only
+disable_networks: ["measurer_pkl", "autoencoder_f2e_pkl"]
 use_ssim: False
 use_deeplabv3: False
+use_kmeans: False
 
 hydra:
   run:

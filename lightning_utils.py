@@ -3,6 +3,18 @@ import torch.nn as nn
 from PIL import Image
 
 
+def normalized_tanh(x, inplace: bool = False):
+    return 0.5 * x.tanh() + 0.5
+
+
+class NormalizedTanh(nn.Module):
+    def __init__(self, inplace: bool = False):
+        super(NormalizedTanh, self).__init__()
+
+    def forward(self, x):
+        return normalized_tanh(x)
+
+
 def pil_loader(path: str) -> Image.Image:
     # open path as file to avoid ResourceWarning (https://github.com/python-pillow/Pillow/issues/835)
     # Taken from torchvision

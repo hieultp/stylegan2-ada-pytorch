@@ -10,6 +10,7 @@ dependencies:
     - torchmetrics[image]
     - adabelief-pytorch
     - ranger-adabelief
+    - pykeops
     - rich
     - wandb
     - hydra-core==1.1.0
@@ -21,6 +22,7 @@ dependencies:
     - jupyterlab
     - jupyterlab-git
     - numpy
+    - matplotlib
     - click
     - requests
     - tqdm

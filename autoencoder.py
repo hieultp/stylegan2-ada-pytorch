@@ -19,7 +19,12 @@ from torchmetrics import MetricCollection, PeakSignalNoiseRatio
 from torchvision.datasets import VisionDataset
 
 import dnnlib
-from lightning_utils import pil_loader, set_debug_apis, split_normalization_params
+from lightning_utils import (
+    NormalizedTanh,
+    pil_loader,
+    set_debug_apis,
+    split_normalization_params,
+)
 
 log = logging.getLogger(__name__)
 
@@ -34,8 +39,7 @@ class MyDataset(VisionDataset):
     def __getitem__(self, index: int):
         filename = self.filenames[index]
 
-        image = np.array(pil_loader(filename), dtype=np.float32, copy=False)
-        image = (image / 255) * 2 - 1  # [-1, 1]
+        image = np.array(pil_loader(filename), dtype=np.float32, copy=False) / 255
         if self.transforms is not None:
             image, _ = self.transforms(image, None)
 
@@ -120,7 +124,7 @@ class Autoencoder(nn.Module):
         decoder_layers.extend(
             [
                 nn.Conv2d(ins, in_channels * 4, 3, padding=1),
-                nn.Tanh(),
+                NormalizedTanh(),
                 nn.PixelShuffle(2),
             ]
         )
@@ -161,10 +165,8 @@ class Mapper(pl.LightningModule):
     def _calculate_loss(self, x_hat, x):
         mse_loss = self.mse_loss(x_hat, x)
 
-        x = (x + 1) * (255 / 2)
-        x_hat = (x_hat + 1) * (255 / 2)
-        target_features = self.vgg16(x, resize_images=False, return_lpips=True)
-        synth_features = self.vgg16(x_hat, resize_images=False, return_lpips=True)
+        target_features = self.vgg16(x * 255, resize_images=False, return_lpips=True)
+        synth_features = self.vgg16(x_hat * 255, resize_images=False, return_lpips=True)
         lpips_loss = (target_features - synth_features).square().sum()
 
         loss = 1e-0 * mse_loss + 1e-2 * lpips_loss
@@ -183,8 +185,6 @@ class Mapper(pl.LightningModule):
     def get_log(self, loss_dict, x_hat, x, state="train"):
         assert state in ["train", "val"]
 
-        x = (x + 1) * 0.5
-        x_hat = (x_hat + 1) * 0.5
         logs = {"train": self.train_metrics, "val": self.val_metrics}[state](x_hat, x)
         for key, val in loss_dict.items():
             logs[f"{state}/{key}"] = val
