@@ -1,0 +1,19 @@
+name: boundary_mover
+
+# path to original working directory
+# hydra hijacks working directory by changing it to the current log directory,
+# so it's useful to have this path as a special variable
+# https://hydra.cc/docs/next/tutorials/basic/running_your_app/working_directory
+work_dir: ${hydra:runtime.cwd}
+
+network_pkl: ${work_dir}/runs/00000-bedroom_256_train_mixed-mirror-stylegan2-kimg15000/network-snapshot-015000.pkl
+source_dir: /home/ubuntu/bedroom_256_train/
+num_pairs: 1000
+num_steps: 1000
+save_video: False
+
+outdir: ${work_dir}/results/boundary_mover/random_img/projection
+
+hydra:
+  run:
+    dir: ./outputs/${name}/${now:%Y-%m-%d-%H-%M-%S}
