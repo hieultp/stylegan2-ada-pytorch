@@ -24,6 +24,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from adabelief_pytorch import AdaBelief
 from einops import rearrange
+from lpips import LPIPS
 from omegaconf import DictConfig
 from PIL import Image
 from pykeops.torch import LazyTensor
@@ -31,6 +32,7 @@ from pytorch_lightning import seed_everything
 from torchmetrics.functional import structural_similarity_index_measure
 from torchvision.models.segmentation import deeplabv3_resnet50
 from torchvision.transforms.functional import normalize
+from torchvision.utils import save_image
 from tqdm import trange
 
 import dnnlib
@@ -108,8 +110,10 @@ def project(
     noise_ramp_length=0.75,
     regularize_noise_weight=1e5,
     device: torch.device,
+    use_pti: bool=True
 ):
     w_avg, w_std = init_w(G, seed, w_avg_samples, device)
+    print(torch.max(target), torch.min(target))
 
     # Setup noise inputs.
     noise_bufs = {
@@ -141,6 +145,7 @@ def project(
         vgg16 = torch.jit.load(f).eval().to(device)
 
     # Features for target image.
+    pti_target = target / 127.5 - 1
     if target.shape[2] > 256:
         target = F.interpolate(target, size=(256, 256), mode="area")
     target_features = vgg16(target, resize_images=False, return_lpips=True)
@@ -207,6 +212,41 @@ def project(
                 buf -= buf.mean()
                 buf *= buf.square().mean().rsqrt()
 
+    # PTI Starts here
+    if use_pti:
+        params = {
+            'lpips_lambda': 1.0,
+            'l2_lambda': 1.0,
+            'lr': 3e-4,
+            'max_steps': 500,
+            'lpips_thres': 0.01
+        }
+        G = G.train().requires_grad_(True)
+        pti_optimizer = torch.optim.Adam(G.parameters(), lr=params['lr'])
+        pti_lpips_lossfn = LPIPS(net='alex').eval().to('cuda')
+        pti_l2_lossfn = torch.nn.MSELoss(reduction='mean')
+        
+        pivot_code = w_out[None, -1].repeat((1, 14, 1))
+
+        i = 0
+        print('Starting PTI...')
+        while i < params['max_steps']:
+            pivot_img = G.synthesis(pivot_code, noise_mode='const', force_fp32=True)
+            pti_lpips_loss = torch.squeeze(pti_lpips_lossfn(pivot_img, pti_target))
+            pti_l2_loss = pti_l2_lossfn(pivot_img, pti_target)
+            pti_loss = pti_lpips_loss * params['lpips_lambda'] + pti_l2_loss * params['l2_lambda']
+            
+            if pti_lpips_loss <= params['lpips_thres']:
+                break
+
+            pti_optimizer.zero_grad()
+            pti_loss.backward()
+            pti_optimizer.step()
+            i += 1
+        
+        print('PTI ended at iteration {:d}'.format(i))
+        G = G.eval().requires_grad_(False)
+
     return w_out, w_std
 
 
@@ -244,6 +284,13 @@ def translate(
             source_image, dtype=torch.float32, device=device
         ).unsqueeze(0)
         w_out_project, w_std = project(G, source_image, seed=seed, device=device)
+
+        pivot_code = w_out_project[None, -1].repeat((1, 14, 1))
+        pivot_img = G.synthesis(pivot_code, noise_mode='const', force_fp32=True)
+        img_path = '/home/hwpang/workspace/stylegan2-nsd/pti_target.png'
+        preview_img = pivot_img[0] / 2. + 0.5
+        save_image(preview_img, img_path)
+
         w_opt = w_out_project[-1].view(1, 1, -1)
         source_image = source_image / 255
     else:
